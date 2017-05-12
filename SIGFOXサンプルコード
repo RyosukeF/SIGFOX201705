@@ -1,0 +1,146 @@
+SIGFOXサンプルコード
+・Raspberry Pi
+# coding: UTF-8
+from serial import *
+from sys import exit
+
+port = '/dev/ttyUSB1'
+
+def sigfox_send(data):
+	try:
+		ser = Serial(port, 9600)
+		print("open serial port %s "% port)
+	except:
+		print("cnnot open serial port %s " % port)
+		exit(1)
+	
+	# Send Data
+	print("1",data)
+
+	atcmd = "AT$SS="
+	Incmd = "\r\n"
+
+	data  = atcmd + data + Incmd
+
+	msg = data.encode("utf-8")
+	print("2",msg)
+	ser.write(data)
+
+	# Receive Respose
+	rcv = ser.readline()
+	print("3",rcv)
+	rcv = ser.readline()
+	print("4",rcv)
+
+	ser.close()
+ 
+・Arduino
+#include <cdcftdi.h>
+
+// Satisfy the IDE, which needs to see the include statment in the ino too.
+#ifdef dobogusinclude
+#include <spi4teensy3.h>
+#include <SPI.h>
+#endif
+
+class FTDIAsync : public FTDIAsyncOper
+{
+public:
+    uint8_t OnInit(FTDI *pftdi);
+};
+
+uint8_t FTDIAsync::OnInit(FTDI *pftdi)
+{
+    uint8_t rcode = 0;
+
+    rcode = pftdi->SetBaudRate(9600);
+
+    if (rcode)
+    {
+        ErrorMessage<uint8_t>(PSTR("SetBaudRate"), rcode);
+        return rcode;
+    }
+    rcode = pftdi->SetFlowControl(FTDI_SIO_DISABLE_FLOW_CTRL);
+
+    if (rcode)
+        ErrorMessage<uint8_t>(PSTR("SetFlowControl"), rcode);
+
+    return rcode;
+}
+
+USB              Usb;
+FTDIAsync        FtdiAsync;
+FTDI             Ftdi(&Usb, &FtdiAsync);
+
+long last_sent_time = 0;
+//30秒間隔でデータ送信
+long SENDING_DURATION = 30000;
+
+void setup() {
+  Serial.begin(9600);
+#if !defined(__MIPSEL__)
+  while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
+#endif
+  Serial.println("Start");
+
+  if (Usb.Init() == -1) {
+    Serial.println("OSC did not start.");
+  }
+}
+
+void loop() {
+  Usb.Task();
+
+  if( Usb.getUsbTaskState() == USB_STATE_RUNNING ) {
+    unsigned long current_time = millis();
+    if (current_time - last_sent_time >= 30000 || last_sent_time == 0) {
+      String message = String(current_time);
+      if (message.length() % 2 == 1) message += "f";  //送信メッセージ文字数を偶数にするため
+      SendKeyApp(message);
+      last_sent_time = current_time;
+    }
+    ReadKeyApp();
+  } else {
+    Serial.print("Usb.getUsbTaskState=");
+    Serial.println(Usb.getUsbTaskState());
+    delay(100);
+  }
+}
+
+//KeyAppからデータを読み取る
+void ReadKeyApp()
+{
+  uint8_t  rcode;
+  uint8_t  buf[64];
+  for (uint8_t i=0; i<64; i++) {
+    buf[i] = 0;
+  }
+  uint16_t rcvd = 64;
+  rcode = Ftdi.RcvData(&rcvd, buf);
+  
+  if (rcode && rcode != hrNAK) {
+    ErrorMessage<uint8_t>(PSTR("Ret"), rcode);
+  }
+
+  if (rcvd > 2) {
+    Serial.print((char*)(buf+2));
+  }
+}
+
+//KeyAppでMessage送信
+void SendKeyApp(String message) {
+  String at = "AT$SS=";
+  at += message;
+  at += "\n";
+  Serial.print("->");
+  Serial.print(at);
+
+  char strbuf[32];
+  at.toCharArray(strbuf, at.length()+2);
+  
+  uint8_t rcode = Ftdi.SndData(strlen(strbuf), (uint8_t*)strbuf);
+  
+  if (rcode) {
+    ErrorMessage<uint8_t>(PSTR("SndData"), rcode);
+  }
+}
